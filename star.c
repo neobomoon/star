@@ -9,14 +9,56 @@
 #include <unistd.h>
 
 char src_path[PATH_MAX];
-char dst_path[PATH_MAX];
+char dst_file[PATH_MAX];
 
 
 typedef struct header{
     char type;
     unsigned int path_len;
     unsigned int data_size;
+    char *path_name;
 }Header;
+
+void
+get_option(int argc, char **argv, char *opt){
+    if(argc == 2){
+        goto exit_err ;
+    }
+
+    if(strcmp(argv[1], "archive") == 0 && argc == 4){ // archive인 경우
+        strcpy(dst_file, argv[2]) ;
+        strcpy(src_path, argv[3]) ;
+
+        if(access(src_path, F_OK) == -1)
+            goto exit_err ;
+        *opt = 'a';
+        return ;
+    }
+    if(strcmp(argv[1], "list") == 0 && argc == 3){
+        strcpy(dst_file, argv[2]) ;
+
+        if(access(dst_file, F_OK) == -1)
+            goto exit_err ;
+
+        *opt = 'l' ;
+        return ;
+    }
+    if(strcmp(argv[1], "extract") == 0 && argc == 3){
+        strcpy(dst_file, argv[2]) ;
+
+        if(access(dst_file, F_OK) == -1)
+            goto exit_err ;
+
+        *opt = 'e' ;
+        return ;
+    }
+
+    goto exit_err ;
+
+exit_err:
+    perror("wrong option") ;
+    exit(1) ;
+}
 
 void
 *path_cat(char *path, char *dir){
@@ -28,189 +70,136 @@ void
 }
 
 void
-write(char *buff, size_t size, FILE *new_fp){
-    if(fwrite(buff, 1, size, new_fp) != size){
-        perror("fail to write");
-        exit(1);
-    }
+header_set(char type, int path_len, size_t data_size, char *path_name, Header *header){
+    header->type = type ;
+    header->path_len = path_len ;
+    header->data_size = data_size ;
+    header->path_name = (char *) malloc(sizeof(char) * strlen(path_name)) ;
+    strcpy(header->path_name, path_name) ;
+    return ;
 }
+
 void
-archive_write(char *f_name, Header *header, FILE *new_fp){
-    char *path = path_cat(src_path, f_name);
+header_write(char type, int path_len, size_t data_size, char *path_name, FILE *new_fp, Header *header){
+    header_set(type, path_len, data_size, path_name, header) ; 
 
-    char buff[512];
-    size_t size = 0;
-    //헤더부터 저장
-    if(fwrite(header, sizeof(Header), 1, new_fp) != sizeof(Header){
-        perror("fail to write header");
-        exit(1);
+    size_t size = 9 + strlen(header->path_name) ;
+    
+    if(fwrite(header, 1, size, new_fp) != size)
+        goto exit_fwrite ;
+
+    free(header->path_name) ;
+    return ;
+
+exit_fwrite:
+    perror("fail to fwrite");
+    exit(1);
+}
+
+void
+data_write(char type, char *path, FILE *new_fp){
+    if(type = 0)
+        return ;
+
+    FILE *fp = fopen(path, "rb") ; 
+    if(fp == NULL)
+        goto exit_fopen ;
+    
+    char buff[512] ;
+    size_t size ;
+    while(feof(fp) == 0){
+        size = fread(buff, 1, sizeof(buff), fp) ; 
+        if(fwrite(buff, 1, size, new_fp) != size)
+            goto exit_fwrite ;
     }
-    //path name 저장
-    write(path, strlen(path), new_fp);
 
-    //데이터 저장
-    if(header->type == 1){
-        FILE *fp = fopen(path, "rb");
-        if(fp == NULL){
-            perror(path);
-            exit(1);
-        }
+    fclose(fp) ;
+    return ;
 
-        while(feof(fp) == 0){
-            size = fread(buff, 1, sizeof(buff), fp);
-            write(buff, size, new_fp); //hex으로 write하기
-        }
-        fclose(fp);
+exit_fopen:
+    perror("fail to fopen") ;
+    exit(1) ;
 
-    }
+exit_fwrite:
+    perror("fail to fwrite") ;
+    exit(1) ;
+}
+
+void
+archive_write(FILE *new_fp, Header *header, char type, char *file){
+    struct stat *s_file ;
+    char *path = path_cat(src_path, file) ;
+    if(stat(path, s_file) == -1)
+        goto exit_stat ;
+    
+    header_write(type, strlen(file), type ? s_file->st_size : 0, file, new_fp, header) ;
+    data_write(type, path, new_fp) ; 
 
     free(path);
-    return;
+    return ;
+
+exit_stat:
+    perror("fail to stat") ;
+    exit(1) ;
 }
 
+//헤더, 데이터를 적어야 함.
 void
-header_update(char *path, Header* header, char type){
-    struct stat s_file;
-    if(stat(path, &s_file) == -1){
-        perror("stat error");
-        exit(1);
-    }
-    header->type = type;
-    header->path_len = strlen(path);
-    header->data_size = type == 1 ? s_file.st_size : 0; 
-    return;
-}
+archive(char *path, FILE *new_fp, Header *header){
 
-void
-archive(char *dir, FILE *new_fp){
-    DIR *dp;
-    struct dirent *ep;
-    Hearder *header = malloc(sizeof(Hearder));
+    DIR *dp = opendir(path) ;
+    if(dp == NULL)
+        goto exit_opendir ; 
     
-    char *path = path_cat(src_path, dir);
-    dp = opendir(path);
-    if(dp == NULL){
-        perror(path);
-        exit(1);
-    }
-
-    for(; ep = readdir(dp); ){
-        if(strcmp(ep->d_name, ".") == 0){
-            continue;
-        }
-        if(strcmp(ep->d_name, "..") == 0){
-            continue;
-        }
-        if(ep->d_type == DT_LNK){
-            continue;
-        }
-
-        if(ep->d_type == DT_REG){
-            char *sub_file = path_cat(dir, ep->d_name);
-            header_update(path, header, 1);
-            archive_write(sub_file, header, new_fp);
-            free(sub_file);
-        }
-        if(ep->d_type == DT_DIR){
-            char *sub_path = path_cat(dir, ep->d_name);
-            header_update(path, header, 0);
-            archive_write(sub_path, header, new_fp);
-            archive(sub_path, new_fp);
-            free(sub_path);
+    struct dirent *dep ;
+    for(; dep = readdir(dp); ){
+        if(strcmp(dep->d_name, ".") == 0)
+            continue ;
+        if(strcmp(dep->d_name, "..") == 0)
+            continue ;
+        if(dep->d_type == DT_LNK)
+            continue ;
+        if(dep->d_type == DT_REG)
+            archive_write(new_fp, header, 1, dep->d_name) ; // 데이터 적기
+        if(dep->d_type == DT_DIR){
+            archive_write(new_fp, header, 0, dep->d_name) ;
+            //여러번 돌 때 돌리기
         }
     } // for end
-    closedir(dp);
-    free(path);
-    fre(header);
-    return;
+
+    closedir(dp) ;
+    return ;
+
+exit_opendir:
+    perror("fail to opendir") ;
+    exit(1) ;
 }
 
-char *
-find_dir(char *path){
-    char *new_path;
+int
+main(int argc, char **argv){
+    char opt ;
+    get_option(argc, argv, &opt) ;
 
-    if(path[0] == '/'){ // 절대경로일 때
-        int ind;
-        for(ind = strlen(path) - 1; path[ind] != '/'; ind--);
-        new_path = strdup(path + ind + 1);
+    FILE *new_fp = fopen(dst_file, "wb") ;
+
+    if(new_fp == NULL)
+        goto exit_fopen ;
+
+    if(opt == 'a'){
+        Header *header ;
+        archive(src_path, new_fp, header) ;
     }
-    else if((path[0] == '.' && path[1] == '/')){ // 상대경로일 때
-        int ind;
-        for(ind = strlen(path) - 1; path[ind] != '/'; ind--);
-        new_path = strdup(path + ind + 1);
+    if(opt == 'l'){
+        //list() ;
     }
-
-    return new_path;
-}
-
-void
-help(){
-    printf("command line instruction\n");
-    printf("1) $./star archive <archive file name> <target directory path>\n");
-    printf("2) $./star list <archive file name>\n");
-    printf("3) $./star extract <archive file name>\n");
-    return;
-}
-
-void
-error_check(char *file){
-    if(access(file, F_OK) == -1){
-            perror(file);
-            exit(1);
-        }
-}
-
-
-int main(int argc, char **argv){
-    if(argc == 1){
-        help();
-        return 0;
+    if(opt == 'e'){
+        //extract() ;
     }
 
-    if(strcmp(argv[1], "archive") == 0 && argc == 4){
-        strcpy(dst_path, argv[2]);
-        FILE *new_fp = fopen(dst_path, "w");
-        error_check(dst_path);
+    fclose(new_fp) ;
+    return 0 ;
 
-        strcpy(src_path, argv[3]);
-        error_check(src_path);
-        char *dir = find_dir(src_path);
-        src_path[strlen(src_path) - strlen(dir)] = '\0';
-
-        archive(dir, new_fp);
-
-        free(dir);
-    }
-    else if(strcmp(argv[1], "list") == 0 && argc == 3){
-        strcpy(dst_path, argv[2]);
-        error_check(dst_path);
-
-        // function call
-    }
-    else if(strcmp(argv[1], "extract") == 0 && argc == 3){
-        strcpy(dst_path, argv[2]);
-        error_check(dst_path);
-
-        // function call
-    }
-    else{
-        fputs("wrong command. How to use command : ./star\n", stderr);
-        exit(1);
-    }
-
-    fclose(new_fp);
-    free(dir);
-    return 0;
-    
-    strncpy(dst_path, argv[1], strlen(argv[1]) - 1); 
-    strncpy(src_path, argv[2], strlen(argv[2]) - 1);
-    printf("%s %s\n", dst_path, src_path);
-
-    char *dir = find_dir(src_path);
-    src_path[strlen(src_path) - strlen(dir)] = '\0';
-    printf("%s %s\n", src_path, dir);
-
-
-    d_copy(dir);
-    return 0;
+exit_fopen:
+    perror("fail to open file") ;
+    exit(1) ;
 }
